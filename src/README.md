@@ -6,6 +6,7 @@ A super simple FastAPI application that allows students to view and sign up for 
 
 - View all available extracurricular activities
 - Sign up for activities
+- Keep activity registrations across server restarts
 
 ## Getting Started
 
@@ -47,4 +48,9 @@ The application uses a simple data model with meaningful identifiers:
    - Name
    - Grade level
 
-All data is stored in memory, which means data will be reset when the server restarts.
+Activity definitions and their initial participant lists are defined in `app.py`.
+Changes to registrations are persisted separately from the activity catalog in
+`src/registrations.json`. The file contains a JSON object mapping each activity
+name to a list of registered student email addresses. If the file does not yet
+exist, the application uses the participant lists defined in `app.py` until the
+first signup or unregister operation creates the registration file.
