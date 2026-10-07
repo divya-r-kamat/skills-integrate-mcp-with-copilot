@@ -8,8 +8,10 @@ for extracurricular activities at Mergington High School.
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+import json
 import os
 from pathlib import Path
+import tempfile
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -18,6 +20,7 @@ app = FastAPI(title="Mergington High School API",
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+REGISTRATIONS_FILE = current_dir / "registrations.json"
 
 # In-memory activity database
 activities = {
@@ -78,6 +81,54 @@ activities = {
 }
 
 
+def load_registrations():
+    """Load persisted participant lists, retaining defaults for a missing store."""
+    if not REGISTRATIONS_FILE.exists():
+        return
+
+    with REGISTRATIONS_FILE.open(encoding="utf-8") as registrations_file:
+        registrations = json.load(registrations_file)
+
+    if not isinstance(registrations, dict):
+        raise ValueError("Registration store must contain a JSON object")
+
+    for activity_name, participants in registrations.items():
+        if (not isinstance(activity_name, str)
+                or not isinstance(participants, list)
+                or not all(isinstance(email, str) for email in participants)):
+            raise ValueError("Registration store must map activity names to email lists")
+        if activity_name in activities:
+            activities[activity_name]["participants"] = participants
+
+
+def save_registrations(activity_name: str, participants: list[str]):
+    """Atomically persist a participant-list change before applying it in memory."""
+    registrations = {
+        name: details["participants"]
+        for name, details in activities.items()
+    }
+    registrations[activity_name] = participants
+    temporary_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=REGISTRATIONS_FILE.parent,
+            delete=False
+        ) as registrations_file:
+            temporary_path = Path(registrations_file.name)
+            json.dump(registrations, registrations_file, indent=2)
+            registrations_file.write("\n")
+        os.replace(temporary_path, REGISTRATIONS_FILE)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+load_registrations()
+
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/static/index.html")
@@ -105,7 +156,8 @@ def signup_for_activity(activity_name: str, email: str):
             detail="Student is already signed up"
         )
 
-    # Add student
+    # Persist before changing the in-memory state.
+    save_registrations(activity_name, activity["participants"] + [email])
     activity["participants"].append(email)
     return {"message": f"Signed up {email} for {activity_name}"}
 
@@ -127,6 +179,9 @@ def unregister_from_activity(activity_name: str, email: str):
             detail="Student is not signed up for this activity"
         )
 
-    # Remove student
-    activity["participants"].remove(email)
+    # Persist before changing the in-memory state.
+    participants = activity["participants"].copy()
+    participants.remove(email)
+    save_registrations(activity_name, participants)
+    activity["participants"] = participants
     return {"message": f"Unregistered {email} from {activity_name}"}
